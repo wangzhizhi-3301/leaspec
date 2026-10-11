@@ -196,7 +196,25 @@ _update_skills() {
 # ============================================================
 # 更新：替换 context 文件中的 bootstrap 块
 # ============================================================
-_update_bootstrap() {
+_validate_bootstrap_markers() {
+  awk '
+    {
+      line = $0
+      sub(/^[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      if (line == "<!-- LEASPEC-BOOTSTRAP-START -->") {
+        if (state != 0) invalid = 1
+        state = 1
+      } else if (line == "<!-- LEASPEC-BOOTSTRAP-END -->") {
+        if (state != 1) invalid = 1
+        state = 2
+      }
+    }
+    END { exit (invalid || state == 1) ? 1 : 0 }
+  ' "$1"
+}
+
+_update_bootstrap() (
   local agent="$1"
   local context_file="$(_get_agent_context_file "$agent")"
   local target_file="$PROJECT_ROOT/$context_file"
@@ -214,20 +232,46 @@ _update_bootstrap() {
     return 0
   fi
 
+  if ! _validate_bootstrap_markers "$target_file"; then
+    red "  --> 更新失败: $context_file 的 bootstrap 标记不完整或重复，保留原文件" >&2
+    return 1
+  fi
+
+  # 跟随 context 软链接，替换实际文件而不是破坏链接。
+  while [ -L "$target_file" ]; do
+    local link
+    link=$(readlink "$target_file")
+    case "$link" in
+      /*) target_file="$link" ;;
+      *) target_file="$(dirname "$target_file")/$link" ;;
+    esac
+  done
+
   # 检查是否已有 bootstrap 标记
-  if grep -q "LEASPEC-BOOTSTRAP-START" "$target_file" 2>/dev/null; then
+  if grep -Eq '^[[:space:]]*<!-- LEASPEC-BOOTSTRAP-START -->[[:space:]]*$' "$target_file"; then
     # 替换已有 bootstrap 块
     local tmpfile
-    tmpfile=$(mktemp)
+    tmpfile=$(mktemp "$target_file.leaspec.XXXXXX")
+    trap 'rm -f "$tmpfile"' EXIT
+    cp -p "$target_file" "$tmpfile"
+    : > "$tmpfile"
     local in_block=false
 
-    while IFS= read -r line; do
-      if echo "$line" | grep -q "LEASPEC-BOOTSTRAP-START"; then
+    while :; do
+      local line marker has_newline=true
+      if ! IFS= read -r line; then
+        has_newline=false
+        [ -n "$line" ] || break
+      fi
+      marker="${line#"${line%%[![:space:]]*}"}"
+      marker="${marker%"${marker##*[![:space:]]}"}"
+      if [ "$marker" = '<!-- LEASPEC-BOOTSTRAP-START -->' ]; then
         # 到达旧块起始 — 跳过直到 END，插入新块
         in_block=true
-        cat "$bootstrap_src" >> "$tmpfile"
+        # 只插入标记块，避免每次更新重复追加模板的块外前言。
+        sed -n '/^<!-- LEASPEC-BOOTSTRAP-START -->$/,/^<!-- LEASPEC-BOOTSTRAP-END -->$/p' "$bootstrap_src" >> "$tmpfile"
         continue
-      elif echo "$line" | grep -q "LEASPEC-BOOTSTRAP-END"; then
+      elif [ "$marker" = '<!-- LEASPEC-BOOTSTRAP-END -->' ]; then
         if $in_block; then
           in_block=false
           continue
@@ -235,7 +279,10 @@ _update_bootstrap() {
       fi
 
       if ! $in_block; then
-        echo "$line" >> "$tmpfile"
+        printf '%s' "$line" >> "$tmpfile"
+        if $has_newline; then
+          printf '\n' >> "$tmpfile"
+        fi
       fi
     done < "$target_file"
 
@@ -247,7 +294,7 @@ _update_bootstrap() {
     cat "$bootstrap_src" >> "$target_file"
     echo "  --> 追加: bootstrap 到 $context_file"
   fi
-}
+)
 
 # ============================================================
 # 更新：覆盖 scripts

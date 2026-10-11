@@ -151,3 +151,21 @@ atomic_write() {
   echo "$content" > "$tmpfile"
   mv "$tmpfile" "$target"
 }
+
+# 直接运行时只分发公开的只读命令；source 时保持函数库行为。
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  case "${1:-}" in
+    get_next_change_number)
+      shift
+      if [ "$#" -gt 1 ]; then
+        echo "用法: helpers.sh get_next_change_number [leaspec-dir]" >&2
+        exit 1
+      fi
+      get_next_change_number "$@"
+      ;;
+    *)
+      echo "用法: helpers.sh get_next_change_number [leaspec-dir]" >&2
+      exit 1
+      ;;
+  esac
+fi

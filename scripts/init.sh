@@ -722,11 +722,34 @@ _write_constitution() {
 # ============================================================
 # File generation (refactored into functions)
 # ============================================================
+_yaml_string() {
+  local value="$1"
+  local code character escaped
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  # Bash 参数不能包含 NUL；其它控制字符使用 YAML 双引号转义。
+  for code in {1..31} 127; do
+    printf -v character '\\%03o' "$code"
+    printf -v character '%b' "$character"
+    printf -v escaped '\\x%02X' "$code"
+    value="${value//"$character"/"$escaped"}"
+  done
+  for code in {128..159}; do
+    printf -v character '\\302\\%03o' "$code"
+    printf -v character '%b' "$character"
+    printf -v escaped '\\u%04X' "$code"
+    value="${value//"$character"/"$escaped"}"
+  done
+  value="${value//$'\342\200\250'/\\u2028}"
+  value="${value//$'\342\200\251'/\\u2029}"
+  printf '"%s"' "$value"
+}
+
 _generate_config() {
   local leaspec_root="$1"
   cat > "$leaspec_root/config.yaml" <<YAML
 # leaspec configuration
-version: "${CFG_VERSION}"
+version: $(_yaml_string "$CFG_VERSION")
 
 # Git 追踪设置
 git:
@@ -736,8 +759,8 @@ git:
 
 # 项目元信息
 project:
-  name: "${CFG_NAME}"
-  description: "${CFG_DESC}"
+  name: $(_yaml_string "$CFG_NAME")
+  description: $(_yaml_string "$CFG_DESC")
 YAML
 }
 
